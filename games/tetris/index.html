@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tetris - Arcade Games</title>
+    <link rel="stylesheet" href="../../css/styles.css">
+</head>
+<body>
+    <div class="container">
+        <div class="game-container">
+            <div class="game-header">
+                <a href="../../index.html" class="back-link">&larr; Back to Games</a>
+                <h1>Tetris</h1>
+            </div>
+
+            <div class="game-info">
+                <div class="score-display">
+                    <span>Score</span>
+                    <strong id="score">0</strong>
+                </div>
+                <div class="level-display">
+                    <span>Level</span>
+                    <strong id="level">1</strong>
+                </div>
+                <div class="lines-display">
+                    <span>Lines</span>
+                    <strong id="lines">0</strong>
+                </div>
+                <div class="high-score-display">
+                    <span>High Score</span>
+                    <strong id="high-score">0</strong>
+                </div>
+            </div>
+
+            <div class="game-layout">
+                <div class="game-main">
+                    <div class="tetris-layout">
+                        <canvas id="game-canvas" width="300" height="600"></canvas>
+                        <div class="next-piece-container">
+                            <span>Next</span>
+                            <canvas id="next-piece-canvas" width="120" height="120"></canvas>
+                        </div>
+                    </div>
+
+                    <div class="game-controls">
+                        <button id="start-btn">Start Game</button>
+                        <button id="pause-btn" class="hidden">Pause</button>
+                    </div>
+
+                    <div class="instructions">
+                        <h3>How to Play</h3>
+                        <ul>
+                            <li><kbd>&larr;</kbd> <kbd>&rarr;</kbd> Move piece</li>
+                            <li><kbd>&uarr;</kbd> Rotate piece</li>
+                            <li><kbd>&darr;</kbd> Soft drop</li>
+                            <li><kbd>Space</kbd> Hard drop / Pause</li>
+                            <li>Clear lines to score points</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="leaderboard">
+                    <h3>Leaderboard</h3>
+                    <ol id="leaderboard-list">
+                        <li class="loading">Loading...</li>
+                    </ol>
+                </div>
+            </div>
+        </div>
+
+        <div id="game-over-overlay" class="game-over-overlay hidden">
+            <div class="game-over-content">
+                <h2>Game Over!</h2>
+                <p>Your score: <strong id="final-score">0</strong></p>
+                <div id="submit-score-section">
+                    <input type="text" id="player-name" placeholder="Enter your name" maxlength="20">
+                    <button id="submit-score-btn">Submit Score</button>
+                </div>
+                <button id="restart-btn">Play Again</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="game.js"></script>
+</body>
+</html>
