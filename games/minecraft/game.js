@@ -94,16 +94,17 @@ const BLOCKS = {
     PLANKS: 9
 };
 
-const BLOCK_COLORS = {
-    [BLOCKS.GRASS]: { top: 0x7CFC00, side: 0x8B4513, bottom: 0x8B4513 },
-    [BLOCKS.DIRT]: { top: 0x8B4513, side: 0x8B4513, bottom: 0x8B4513 },
-    [BLOCKS.STONE]: { top: 0x808080, side: 0x808080, bottom: 0x808080 },
-    [BLOCKS.WOOD]: { top: 0x966F33, side: 0x6B4423, bottom: 0x966F33 },
-    [BLOCKS.LEAVES]: { top: 0x228B22, side: 0x228B22, bottom: 0x228B22 },
-    [BLOCKS.SAND]: { top: 0xF4D03F, side: 0xF4D03F, bottom: 0xF4D03F },
-    [BLOCKS.WATER]: { top: 0x4169E1, side: 0x4169E1, bottom: 0x4169E1 },
-    [BLOCKS.COBBLESTONE]: { top: 0x696969, side: 0x696969, bottom: 0x696969 },
-    [BLOCKS.PLANKS]: { top: 0xDEB887, side: 0xDEB887, bottom: 0xDEB887 }
+// Block break times (in milliseconds)
+const BLOCK_BREAK_TIME = {
+    [BLOCKS.GRASS]: 400,
+    [BLOCKS.DIRT]: 400,
+    [BLOCKS.STONE]: 1200,
+    [BLOCKS.WOOD]: 800,
+    [BLOCKS.LEAVES]: 200,
+    [BLOCKS.SAND]: 400,
+    [BLOCKS.WATER]: 100,
+    [BLOCKS.COBBLESTONE]: 1500,
+    [BLOCKS.PLANKS]: 600
 };
 
 const BLOCK_NAMES = {
@@ -121,13 +122,12 @@ const BLOCK_NAMES = {
 // Game constants
 const CHUNK_SIZE = 16;
 const WORLD_HEIGHT = 64;
-const RENDER_DISTANCE = 4;
+const RENDER_DISTANCE = 3;
 
 // Game state
 let scene, camera, renderer;
 let player = { x: 0, y: 30, z: 0, yaw: 0, pitch: 0, vy: 0 };
 let chunks = new Map();
-let blockGeometries = new Map();
 let selectedBlock = BLOCKS.DIRT;
 let hotbar = [BLOCKS.GRASS, BLOCKS.DIRT, BLOCKS.STONE, BLOCKS.COBBLESTONE, BLOCKS.WOOD, BLOCKS.PLANKS, BLOCKS.LEAVES, BLOCKS.SAND, BLOCKS.WATER];
 let selectedSlot = 0;
@@ -139,6 +139,16 @@ let playerName = 'Player';
 let playerId = Math.random().toString(36).substr(2, 9);
 let otherPlayers = new Map();
 let ws = null;
+
+// Block breaking state
+let isBreaking = false;
+let breakingBlock = null;
+let breakStartTime = 0;
+let breakProgress = 0;
+let breakingMesh = null;
+
+// Textures
+let textures = {};
 
 const noise = new SimplexNoise(12345);
 
@@ -152,26 +162,229 @@ const fpsEl = document.getElementById('fps');
 const playersListEl = document.getElementById('players');
 const hudEl = document.getElementById('hud');
 
+// Create Minecraft-style textures
+function createTextures() {
+    const textureSize = 16;
+
+    function createTexture(drawFunc) {
+        const canvas = document.createElement('canvas');
+        canvas.width = textureSize;
+        canvas.height = textureSize;
+        const ctx = canvas.getContext('2d');
+        drawFunc(ctx, textureSize);
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.magFilter = THREE.NearestFilter;
+        texture.minFilter = THREE.NearestFilter;
+        return texture;
+    }
+
+    // Grass top
+    textures.grassTop = createTexture((ctx, size) => {
+        ctx.fillStyle = '#5d9b47';
+        ctx.fillRect(0, 0, size, size);
+        for (let i = 0; i < 50; i++) {
+            ctx.fillStyle = Math.random() > 0.5 ? '#4a8339' : '#6bab55';
+            ctx.fillRect(Math.floor(Math.random() * size), Math.floor(Math.random() * size), 1, 1);
+        }
+    });
+
+    // Grass side
+    textures.grassSide = createTexture((ctx, size) => {
+        ctx.fillStyle = '#866043';
+        ctx.fillRect(0, 0, size, size);
+        ctx.fillStyle = '#5d9b47';
+        ctx.fillRect(0, 0, size, 3);
+        for (let i = 0; i < 30; i++) {
+            ctx.fillStyle = Math.random() > 0.5 ? '#7a5639' : '#95694d';
+            ctx.fillRect(Math.floor(Math.random() * size), 3 + Math.floor(Math.random() * (size - 3)), 1, 1);
+        }
+    });
+
+    // Dirt
+    textures.dirt = createTexture((ctx, size) => {
+        ctx.fillStyle = '#866043';
+        ctx.fillRect(0, 0, size, size);
+        for (let i = 0; i < 40; i++) {
+            ctx.fillStyle = Math.random() > 0.5 ? '#7a5639' : '#95694d';
+            ctx.fillRect(Math.floor(Math.random() * size), Math.floor(Math.random() * size), 1, 1);
+        }
+    });
+
+    // Stone
+    textures.stone = createTexture((ctx, size) => {
+        ctx.fillStyle = '#8a8a8a';
+        ctx.fillRect(0, 0, size, size);
+        for (let i = 0; i < 60; i++) {
+            ctx.fillStyle = Math.random() > 0.5 ? '#7a7a7a' : '#9a9a9a';
+            ctx.fillRect(Math.floor(Math.random() * size), Math.floor(Math.random() * size), 2, 2);
+        }
+        ctx.fillStyle = '#6a6a6a';
+        ctx.fillRect(2, 5, 4, 3);
+        ctx.fillRect(10, 10, 3, 4);
+    });
+
+    // Wood side (log)
+    textures.woodSide = createTexture((ctx, size) => {
+        ctx.fillStyle = '#6b5239';
+        ctx.fillRect(0, 0, size, size);
+        for (let y = 0; y < size; y += 3) {
+            ctx.fillStyle = y % 6 === 0 ? '#5a4530' : '#7c6342';
+            ctx.fillRect(0, y, size, 2);
+        }
+    });
+
+    // Wood top
+    textures.woodTop = createTexture((ctx, size) => {
+        ctx.fillStyle = '#9e7e4e';
+        ctx.fillRect(0, 0, size, size);
+        ctx.fillStyle = '#6b5239';
+        ctx.strokeStyle = '#5a4530';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(size/2, size/2, 5, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(size/2, size/2, 3, 0, Math.PI * 2);
+        ctx.stroke();
+    });
+
+    // Leaves
+    textures.leaves = createTexture((ctx, size) => {
+        ctx.fillStyle = '#3a6b24';
+        ctx.fillRect(0, 0, size, size);
+        for (let i = 0; i < 40; i++) {
+            ctx.fillStyle = Math.random() > 0.5 ? '#2d5a1a' : '#4a7b34';
+            ctx.fillRect(Math.floor(Math.random() * size), Math.floor(Math.random() * size), 2, 2);
+        }
+    });
+
+    // Sand
+    textures.sand = createTexture((ctx, size) => {
+        ctx.fillStyle = '#e3d59e';
+        ctx.fillRect(0, 0, size, size);
+        for (let i = 0; i < 50; i++) {
+            ctx.fillStyle = Math.random() > 0.5 ? '#d4c68f' : '#f0e4ad';
+            ctx.fillRect(Math.floor(Math.random() * size), Math.floor(Math.random() * size), 1, 1);
+        }
+    });
+
+    // Water
+    textures.water = createTexture((ctx, size) => {
+        ctx.fillStyle = '#3574c4';
+        ctx.fillRect(0, 0, size, size);
+        for (let i = 0; i < 20; i++) {
+            ctx.fillStyle = 'rgba(100, 180, 255, 0.5)';
+            ctx.fillRect(Math.floor(Math.random() * size), Math.floor(Math.random() * size), 3, 1);
+        }
+    });
+
+    // Cobblestone
+    textures.cobblestone = createTexture((ctx, size) => {
+        ctx.fillStyle = '#7a7a7a';
+        ctx.fillRect(0, 0, size, size);
+        const stones = [[1,1,5,4], [7,0,5,5], [13,2,3,4], [0,6,4,5], [5,5,5,6], [11,6,5,5], [1,12,6,4], [8,12,5,4]];
+        stones.forEach(([x,y,w,h]) => {
+            ctx.fillStyle = '#8a8a8a';
+            ctx.fillRect(x, y, w, h);
+            ctx.fillStyle = '#6a6a6a';
+            ctx.fillRect(x, y+h-1, w, 1);
+            ctx.fillRect(x+w-1, y, 1, h);
+        });
+    });
+
+    // Planks
+    textures.planks = createTexture((ctx, size) => {
+        ctx.fillStyle = '#b08845';
+        ctx.fillRect(0, 0, size, size);
+        for (let y = 0; y < size; y += 4) {
+            ctx.fillStyle = '#9a7535';
+            ctx.fillRect(0, y + 3, size, 1);
+            ctx.fillStyle = '#c09855';
+            ctx.fillRect(0, y, size, 1);
+        }
+        ctx.fillStyle = '#8a6525';
+        ctx.fillRect(4, 0, 1, size);
+        ctx.fillRect(12, 0, 1, size);
+    });
+}
+
+function getBlockMaterials(blockType) {
+    let top, side, bottom;
+
+    switch (blockType) {
+        case BLOCKS.GRASS:
+            top = textures.grassTop;
+            side = textures.grassSide;
+            bottom = textures.dirt;
+            break;
+        case BLOCKS.DIRT:
+            top = side = bottom = textures.dirt;
+            break;
+        case BLOCKS.STONE:
+            top = side = bottom = textures.stone;
+            break;
+        case BLOCKS.WOOD:
+            top = bottom = textures.woodTop;
+            side = textures.woodSide;
+            break;
+        case BLOCKS.LEAVES:
+            top = side = bottom = textures.leaves;
+            break;
+        case BLOCKS.SAND:
+            top = side = bottom = textures.sand;
+            break;
+        case BLOCKS.WATER:
+            top = side = bottom = textures.water;
+            break;
+        case BLOCKS.COBBLESTONE:
+            top = side = bottom = textures.cobblestone;
+            break;
+        case BLOCKS.PLANKS:
+            top = side = bottom = textures.planks;
+            break;
+        default:
+            top = side = bottom = textures.stone;
+    }
+
+    const materials = [
+        new THREE.MeshLambertMaterial({ map: side }),   // right
+        new THREE.MeshLambertMaterial({ map: side }),   // left
+        new THREE.MeshLambertMaterial({ map: top }),    // top
+        new THREE.MeshLambertMaterial({ map: bottom }), // bottom
+        new THREE.MeshLambertMaterial({ map: side }),   // front
+        new THREE.MeshLambertMaterial({ map: side })    // back
+    ];
+
+    if (blockType === BLOCKS.LEAVES) {
+        materials.forEach(m => { m.transparent = true; m.opacity = 0.9; m.side = THREE.DoubleSide; });
+    }
+    if (blockType === BLOCKS.WATER) {
+        materials.forEach(m => { m.transparent = true; m.opacity = 0.7; });
+    }
+
+    return materials;
+}
+
 // Initialize Three.js
 function initThreeJS() {
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x87CEEB);
-    scene.fog = new THREE.Fog(0x87CEEB, 50, CHUNK_SIZE * RENDER_DISTANCE);
+    scene.fog = new THREE.Fog(0x87CEEB, 20, CHUNK_SIZE * RENDER_DISTANCE * 1.5);
 
-    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 1000);
     camera.position.set(player.x, player.y, player.z);
 
-    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setPixelRatio(1); // Force pixel ratio of 1 for performance
     gameContainer.appendChild(renderer.domElement);
 
     // Lighting
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
     scene.add(ambientLight);
 
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-    directionalLight.position.set(100, 200, 100);
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
+    directionalLight.position.set(50, 100, 50);
     scene.add(directionalLight);
 
     window.addEventListener('resize', () => {
@@ -179,6 +392,8 @@ function initThreeJS() {
         camera.updateProjectionMatrix();
         renderer.setSize(window.innerWidth, window.innerHeight);
     });
+
+    createTextures();
 }
 
 // Terrain generation
@@ -216,7 +431,7 @@ function generateChunk(chunkX, chunkZ) {
             }
 
             // Add trees occasionally
-            if (height > 15 && Math.random() < 0.01) {
+            if (height > 15 && Math.random() < 0.008) {
                 const treeHeight = 4 + Math.floor(Math.random() * 3);
                 for (let ty = 0; ty < treeHeight; ty++) {
                     blocks.set(`${x},${height + ty},${z}`, BLOCKS.WOOD);
@@ -293,31 +508,8 @@ function setBlock(x, y, z, blockType) {
     }
 }
 
-function createBlockMesh(blockType, x, y, z, neighbors) {
-    const colors = BLOCK_COLORS[blockType];
-    if (!colors) return null;
-
-    const geometry = new THREE.BoxGeometry(1, 1, 1);
-    const materials = [
-        new THREE.MeshLambertMaterial({ color: colors.side }),   // right
-        new THREE.MeshLambertMaterial({ color: colors.side }),   // left
-        new THREE.MeshLambertMaterial({ color: colors.top }),    // top
-        new THREE.MeshLambertMaterial({ color: colors.bottom }), // bottom
-        new THREE.MeshLambertMaterial({ color: colors.side }),   // front
-        new THREE.MeshLambertMaterial({ color: colors.side })    // back
-    ];
-
-    if (blockType === BLOCKS.LEAVES) {
-        materials.forEach(m => { m.transparent = true; m.opacity = 0.9; });
-    }
-    if (blockType === BLOCKS.WATER) {
-        materials.forEach(m => { m.transparent = true; m.opacity = 0.6; });
-    }
-
-    const mesh = new THREE.Mesh(geometry, materials);
-    mesh.position.set(x + 0.5, y + 0.5, z + 0.5);
-    return mesh;
-}
+// Geometry cache for better performance
+const boxGeometry = new THREE.BoxGeometry(1, 1, 1);
 
 function buildChunkMesh(chunkX, chunkZ) {
     const chunk = chunks.get(getChunkKey(chunkX, chunkZ));
@@ -340,11 +532,14 @@ function buildChunkMesh(chunkX, chunkZ) {
             nz: getBlock(wx, ly, wz - 1)
         };
 
-        const hasVisibleFace = Object.values(neighbors).some(n => n === BLOCKS.AIR || n === BLOCKS.WATER);
+        const isTransparent = (b) => b === BLOCKS.AIR || b === BLOCKS.WATER || b === BLOCKS.LEAVES;
+        const hasVisibleFace = Object.values(neighbors).some(n => isTransparent(n));
 
-        if (hasVisibleFace || blockType === BLOCKS.WATER) {
-            const mesh = createBlockMesh(blockType, wx, ly, wz, neighbors);
-            if (mesh) group.add(mesh);
+        if (hasVisibleFace || blockType === BLOCKS.WATER || blockType === BLOCKS.LEAVES) {
+            const materials = getBlockMaterials(blockType);
+            const mesh = new THREE.Mesh(boxGeometry, materials);
+            mesh.position.set(wx + 0.5, ly + 0.5, wz + 0.5);
+            group.add(mesh);
         }
     });
 
@@ -359,7 +554,7 @@ function rebuildChunkMesh(chunkX, chunkZ) {
     if (chunk.mesh) {
         scene.remove(chunk.mesh);
         chunk.mesh.traverse(obj => {
-            if (obj.geometry) obj.geometry.dispose();
+            if (obj.geometry && obj.geometry !== boxGeometry) obj.geometry.dispose();
             if (obj.material) {
                 if (Array.isArray(obj.material)) {
                     obj.material.forEach(m => m.dispose());
@@ -404,7 +599,7 @@ function updateChunks() {
             if (chunk.mesh) {
                 scene.remove(chunk.mesh);
                 chunk.mesh.traverse(obj => {
-                    if (obj.geometry) obj.geometry.dispose();
+                    if (obj.geometry && obj.geometry !== boxGeometry) obj.geometry.dispose();
                     if (obj.material) {
                         if (Array.isArray(obj.material)) {
                             obj.material.forEach(m => m.dispose());
@@ -454,14 +649,30 @@ function initControls() {
         isPointerLocked = document.pointerLockElement === renderer.domElement;
     });
 
+    // Mouse down - start breaking
     document.addEventListener('mousedown', (e) => {
         if (!isPointerLocked) return;
+        if (e.button === 0) {
+            const hit = raycast();
+            if (hit) {
+                const block = getBlock(hit.x, hit.y, hit.z);
+                if (block !== BLOCKS.AIR) {
+                    isBreaking = true;
+                    breakingBlock = { x: hit.x, y: hit.y, z: hit.z, type: block };
+                    breakStartTime = performance.now();
+                    breakProgress = 0;
+                    createBreakingOverlay(hit.x, hit.y, hit.z);
+                }
+            }
+        }
+    });
 
-        const hit = raycast();
-        if (!hit) return;
-
-        if (e.button === 0) { // Left click - break
-            setBlock(hit.x, hit.y, hit.z, BLOCKS.AIR);
+    // Mouse up - stop breaking
+    document.addEventListener('mouseup', (e) => {
+        if (e.button === 0) {
+            isBreaking = false;
+            breakingBlock = null;
+            removeBreakingOverlay();
         }
     });
 
@@ -488,12 +699,64 @@ function initControls() {
     });
 }
 
+function createBreakingOverlay(x, y, z) {
+    removeBreakingOverlay();
+    const geometry = new THREE.BoxGeometry(1.01, 1.01, 1.01);
+    const material = new THREE.MeshBasicMaterial({
+        color: 0x000000,
+        transparent: true,
+        opacity: 0.3,
+        wireframe: true
+    });
+    breakingMesh = new THREE.Mesh(geometry, material);
+    breakingMesh.position.set(x + 0.5, y + 0.5, z + 0.5);
+    scene.add(breakingMesh);
+}
+
+function removeBreakingOverlay() {
+    if (breakingMesh) {
+        scene.remove(breakingMesh);
+        breakingMesh.geometry.dispose();
+        breakingMesh.material.dispose();
+        breakingMesh = null;
+    }
+}
+
+function updateBreaking() {
+    if (!isBreaking || !breakingBlock) return;
+
+    const hit = raycast();
+    if (!hit || hit.x !== breakingBlock.x || hit.y !== breakingBlock.y || hit.z !== breakingBlock.z) {
+        // Looking at different block, reset
+        isBreaking = false;
+        breakingBlock = null;
+        removeBreakingOverlay();
+        return;
+    }
+
+    const breakTime = BLOCK_BREAK_TIME[breakingBlock.type] || 500;
+    const elapsed = performance.now() - breakStartTime;
+    breakProgress = Math.min(elapsed / breakTime, 1);
+
+    // Update overlay opacity based on progress
+    if (breakingMesh) {
+        breakingMesh.material.opacity = 0.2 + breakProgress * 0.5;
+    }
+
+    if (breakProgress >= 1) {
+        setBlock(breakingBlock.x, breakingBlock.y, breakingBlock.z, BLOCKS.AIR);
+        isBreaking = false;
+        breakingBlock = null;
+        removeBreakingOverlay();
+    }
+}
+
 function raycast() {
     const direction = new THREE.Vector3();
     camera.getWorldDirection(direction);
 
     const step = 0.1;
-    const maxDist = 6;
+    const maxDist = 5;
 
     let px = camera.position.x;
     let py = camera.position.y;
@@ -530,17 +793,24 @@ function raycast() {
 }
 
 function updatePlayer(dt) {
-    const speed = isFlying ? 15 : 5;
+    const speed = isFlying ? 10 : 4.5;
     const moveSpeed = speed * dt;
 
-    // Calculate movement direction
+    // Calculate forward direction based on yaw (W = forward, S = backward)
+    const forwardX = -Math.sin(player.yaw);
+    const forwardZ = -Math.cos(player.yaw);
+
+    // Calculate right direction (D = right, A = left)
+    const rightX = Math.cos(player.yaw);
+    const rightZ = -Math.sin(player.yaw);
+
     let moveX = 0;
     let moveZ = 0;
 
-    if (keys['KeyW']) { moveX += Math.sin(player.yaw); moveZ += Math.cos(player.yaw); }
-    if (keys['KeyS']) { moveX -= Math.sin(player.yaw); moveZ -= Math.cos(player.yaw); }
-    if (keys['KeyA']) { moveX += Math.cos(player.yaw); moveZ -= Math.sin(player.yaw); }
-    if (keys['KeyD']) { moveX -= Math.cos(player.yaw); moveZ += Math.sin(player.yaw); }
+    if (keys['KeyW']) { moveX += forwardX; moveZ += forwardZ; }
+    if (keys['KeyS']) { moveX -= forwardX; moveZ -= forwardZ; }
+    if (keys['KeyA']) { moveX -= rightX; moveZ -= rightZ; }
+    if (keys['KeyD']) { moveX += rightX; moveZ += rightZ; }
 
     // Normalize
     const len = Math.sqrt(moveX * moveX + moveZ * moveZ);
@@ -598,11 +868,9 @@ function updatePlayer(dt) {
 // HUD
 function updateHUD() {
     hudEl.innerHTML = hotbar.map((block, i) => {
-        const color = BLOCK_COLORS[block]?.top || 0x888888;
-        const hexColor = '#' + color.toString(16).padStart(6, '0');
         return `
             <div class="hotbar-slot ${i === selectedSlot ? 'selected' : ''}">
-                <div class="block-preview" style="background: ${hexColor}"></div>
+                <span style="font-size:10px">${BLOCK_NAMES[block]}</span>
             </div>
         `;
     }).join('');
@@ -639,7 +907,7 @@ function connectMultiplayer() {
         };
 
         ws.onerror = (err) => {
-            console.log('WebSocket error (server may not support WebSocket)');
+            console.log('WebSocket error');
         };
     } catch (e) {
         console.log('WebSocket not available');
@@ -658,7 +926,6 @@ function handleServerMessage(data) {
             removeOtherPlayer(data.id);
             break;
         case 'block':
-            // Block placed by another player
             const { chunkX, chunkZ } = worldToChunk(data.x, data.z);
             const chunk = chunks.get(getChunkKey(chunkX, chunkZ));
             if (chunk) {
@@ -681,7 +948,6 @@ function updatePlayersList(players) {
         `<li style="color: ${p.id === playerId ? '#4ade80' : 'white'}">${p.name}</li>`
     ).join('');
 
-    // Update other player meshes
     players.forEach(p => {
         if (p.id !== playerId) {
             updateOtherPlayer(p);
@@ -695,7 +961,6 @@ function updateOtherPlayer(data) {
     let playerMesh = otherPlayers.get(data.id);
 
     if (!playerMesh) {
-        // Create player mesh (simple box for now)
         const geometry = new THREE.BoxGeometry(0.6, 1.8, 0.6);
         const material = new THREE.MeshLambertMaterial({ color: 0x00ff00 });
         playerMesh = new THREE.Mesh(geometry, material);
@@ -728,16 +993,17 @@ function sendPosition() {
     }
 }
 
-// Main game loop
+// Main game loop - optimized for 60fps
 let lastTime = performance.now();
 let frameCount = 0;
 let fpsTime = 0;
+let chunkUpdateTimer = 0;
 
 function gameLoop() {
     requestAnimationFrame(gameLoop);
 
     const now = performance.now();
-    const dt = Math.min((now - lastTime) / 1000, 0.1);
+    const dt = Math.min((now - lastTime) / 1000, 0.05);
     lastTime = now;
 
     // FPS counter
@@ -750,7 +1016,14 @@ function gameLoop() {
     }
 
     updatePlayer(dt);
-    updateChunks();
+    updateBreaking();
+
+    // Update chunks less frequently
+    chunkUpdateTimer += dt;
+    if (chunkUpdateTimer > 0.5) {
+        updateChunks();
+        chunkUpdateTimer = 0;
+    }
 
     renderer.render(scene, camera);
 }
