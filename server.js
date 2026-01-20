@@ -128,6 +128,183 @@ const server = http.createServer((req, res) => {
     }
 });
 
+// WebSocket for Minecraft multiplayer
+const players = new Map();
+const blockChanges = [];
+
+// Simple WebSocket implementation (without external dependency)
+function handleWebSocket(req, socket) {
+    const key = req.headers['sec-websocket-key'];
+    const acceptKey = require('crypto')
+        .createHash('sha1')
+        .update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')
+        .digest('base64');
+
+    socket.write(
+        'HTTP/1.1 101 Switching Protocols\r\n' +
+        'Upgrade: websocket\r\n' +
+        'Connection: Upgrade\r\n' +
+        `Sec-WebSocket-Accept: ${acceptKey}\r\n\r\n`
+    );
+
+    let playerId = null;
+
+    function send(data) {
+        const json = JSON.stringify(data);
+        const buf = Buffer.from(json);
+        const frame = Buffer.alloc(buf.length + 2);
+        frame[0] = 0x81; // text frame
+        frame[1] = buf.length;
+        buf.copy(frame, 2);
+        socket.write(frame);
+    }
+
+    function broadcast(data, excludeId = null) {
+        players.forEach((player, id) => {
+            if (id !== excludeId && player.socket) {
+                try {
+                    const json = JSON.stringify(data);
+                    const buf = Buffer.from(json);
+                    const frame = Buffer.alloc(buf.length + 2);
+                    frame[0] = 0x81;
+                    frame[1] = buf.length;
+                    buf.copy(frame, 2);
+                    player.socket.write(frame);
+                } catch (e) {}
+            }
+        });
+    }
+
+    function broadcastPlayerList() {
+        const playerList = Array.from(players.values()).map(p => ({
+            id: p.id,
+            name: p.name,
+            x: p.x,
+            y: p.y,
+            z: p.z
+        }));
+        broadcast({ type: 'players', players: playerList });
+    }
+
+    socket.on('data', (buffer) => {
+        try {
+            // Parse WebSocket frame
+            const firstByte = buffer[0];
+            const opcode = firstByte & 0x0f;
+
+            if (opcode === 0x08) {
+                // Connection close
+                socket.end();
+                return;
+            }
+
+            if (opcode !== 0x01) return; // Only handle text frames
+
+            const secondByte = buffer[1];
+            const isMasked = (secondByte & 0x80) !== 0;
+            let payloadLength = secondByte & 0x7f;
+
+            let offset = 2;
+            if (payloadLength === 126) {
+                payloadLength = buffer.readUInt16BE(2);
+                offset = 4;
+            } else if (payloadLength === 127) {
+                payloadLength = Number(buffer.readBigUInt64BE(2));
+                offset = 10;
+            }
+
+            let mask;
+            if (isMasked) {
+                mask = buffer.slice(offset, offset + 4);
+                offset += 4;
+            }
+
+            const payload = buffer.slice(offset, offset + payloadLength);
+
+            if (isMasked) {
+                for (let i = 0; i < payload.length; i++) {
+                    payload[i] ^= mask[i % 4];
+                }
+            }
+
+            const message = JSON.parse(payload.toString());
+
+            switch (message.type) {
+                case 'join':
+                    playerId = message.id;
+                    players.set(playerId, {
+                        id: playerId,
+                        name: message.name,
+                        x: message.x || 0,
+                        y: message.y || 30,
+                        z: message.z || 0,
+                        socket: socket
+                    });
+                    console.log(`Player joined: ${message.name}`);
+                    broadcastPlayerList();
+                    break;
+
+                case 'move':
+                    if (playerId && players.has(playerId)) {
+                        const player = players.get(playerId);
+                        player.x = message.x;
+                        player.y = message.y;
+                        player.z = message.z;
+                        broadcast({
+                            type: 'playerMove',
+                            id: playerId,
+                            x: message.x,
+                            y: message.y,
+                            z: message.z
+                        }, playerId);
+                    }
+                    break;
+
+                case 'block':
+                    // Broadcast block change to all other players
+                    broadcast({
+                        type: 'block',
+                        x: message.x,
+                        y: message.y,
+                        z: message.z,
+                        blockType: message.blockType
+                    }, playerId);
+                    break;
+            }
+        } catch (e) {
+            // Ignore parse errors
+        }
+    });
+
+    socket.on('close', () => {
+        if (playerId) {
+            const player = players.get(playerId);
+            if (player) {
+                console.log(`Player left: ${player.name}`);
+            }
+            players.delete(playerId);
+            broadcast({ type: 'playerLeave', id: playerId });
+            broadcastPlayerList();
+        }
+    });
+
+    socket.on('error', () => {
+        if (playerId) {
+            players.delete(playerId);
+            broadcast({ type: 'playerLeave', id: playerId });
+        }
+    });
+}
+
+server.on('upgrade', (req, socket, head) => {
+    if (req.headers['upgrade']?.toLowerCase() === 'websocket') {
+        handleWebSocket(req, socket);
+    } else {
+        socket.destroy();
+    }
+});
+
 server.listen(PORT, () => {
     console.log(`Arcade Games server running at http://localhost:${PORT}`);
+    console.log('Minecraft multiplayer WebSocket enabled');
 });
