@@ -462,7 +462,17 @@ function initControls() {
 
         if (e.button === 0) { // Left click - break
             setBlock(hit.x, hit.y, hit.z, BLOCKS.AIR);
-        } else if (e.button === 2) { // Right click - place
+        }
+    });
+
+    document.addEventListener('contextmenu', (e) => e.preventDefault());
+
+    // V key to place block
+    document.addEventListener('keydown', (e) => {
+        if (e.code === 'KeyV' && isPointerLocked) {
+            const hit = raycast();
+            if (!hit) return;
+
             const nx = hit.x + hit.normal.x;
             const ny = hit.y + hit.normal.y;
             const nz = hit.z + hit.normal.z;
@@ -476,8 +486,6 @@ function initControls() {
             setBlock(nx, ny, nz, selectedBlock);
         }
     });
-
-    document.addEventListener('contextmenu', (e) => e.preventDefault());
 }
 
 function raycast() {
