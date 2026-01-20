@@ -134,7 +134,7 @@ let selectedSlot = 0;
 
 let keys = {};
 let isPointerLocked = false;
-let isFlying = true;
+let isFlying = false;
 let playerName = 'Player';
 let playerId = Math.random().toString(36).substr(2, 9);
 let otherPlayers = new Map();
